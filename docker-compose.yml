@@ -1,0 +1,119 @@
+version: '3.8'
+
+services:
+  # CockroachDB - Distributed SQL Database
+  cockroachdb:
+    image: cockroachdb/cockroach:v23.1.15
+    container_name: edge-volt-cockroachdb
+    command: start-single-node --insecure --http-addr=0.0.0.0:8080 --listen-addr=localhost:26257
+    ports:
+      - "26257:26257"  # SQL port
+      - "8081:8080"    # Admin UI port
+    volumes:
+      - cockroach_data:/cockroach/cockroach-data
+      - ./database/init:/docker-entrypoint-initdb.d
+    environment:
+      - COCKROACH_DATABASE=voltedge
+      - COCKROACH_USER=voltedge
+      - COCKROACH_PASSWORD=voltedge_password
+    healthcheck:
+      test: ["CMD", "cockroach", "node", "status", "--insecure"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - voltedge-network
+  # Zig Simulation Engine
+  zig-core:
+    build:
+      context: ./zig-core
+      dockerfile: Dockerfile.simple
+    ports:
+      - "9091:9091"  # gRPC port
+    environment:
+      - SIMULATION_MODE=production
+      - LOG_LEVEL=info
+    volumes:
+      - ./data/simulations:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "9091"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Go API Gateway
+  api-gateway:
+    build:
+      context: ./go-services
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"  # HTTP API
+      - "8082:8081"  # WebSocket
+      - "9090:9090"  # Metrics
+    environment:
+      - ZIG_GRPC_ENDPOINT=zig-core:9091
+      - LOG_LEVEL=info
+      - METRICS_ENABLED=true
+    depends_on:
+      zig-core:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Svelte Frontend
+  frontend:
+    build:
+      context: ./svelte-frontend
+      dockerfile: Dockerfile
+    ports:
+      - "5173:80"
+    environment:
+      - VITE_API_URL=http://localhost:8080
+      - VITE_WS_URL=ws://localhost:8081
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Prometheus for metrics
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9092:9090"
+    volumes:
+      - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    restart: unless-stopped
+
+  # Grafana for dashboards
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./docker/grafana:/etc/grafana/provisioning
+    restart: unless-stopped
+
+volumes:
+  prometheus_data:
+  grafana_data:
+  cockroach_data:
+
+networks:
+  voltedge-network:
+    driver: bridge

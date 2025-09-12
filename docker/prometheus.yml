@@ -1,0 +1,28 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  # - "first_rules.yml"
+  # - "second_rules.yml"
+
+scrape_configs:
+  # VoltEdge API Gateway metrics
+  - job_name: 'voltedge-api'
+    static_configs:
+      - targets: ['api-gateway:9090']
+    scrape_interval: 5s
+    metrics_path: '/metrics'
+    
+  # VoltEdge Zig Core metrics (if exposed)
+  - job_name: 'voltedge-zig'
+    static_configs:
+      - targets: ['zig-core:9091']
+    scrape_interval: 5s
+    metrics_path: '/metrics'
+    
+  # Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+

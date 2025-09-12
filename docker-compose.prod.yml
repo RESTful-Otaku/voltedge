@@ -1,0 +1,240 @@
+version: '3.8'
+
+services:
+  # CockroachDB - Production configuration
+  cockroachdb:
+    image: cockroachdb/cockroach:v23.1.15
+    container_name: voltedge-cockroachdb-prod
+    command: start-single-node --insecure --http-addr=0.0.0.0:8080 --listen-addr=0.0.0.0:26257
+    ports:
+      - "26257:26257"
+      - "8080:8080"
+    volumes:
+      - cockroach_data:/cockroach/cockroach-data
+      - ./database/init:/docker-entrypoint-initdb.d
+    environment:
+      - COCKROACH_DATABASE=voltedge
+      - COCKROACH_USER=voltedge
+      - COCKROACH_PASSWORD=${COCKROACH_PASSWORD:-voltedge_password}
+    healthcheck:
+      test: ["CMD", "cockroach", "node", "status", "--insecure"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - voltedge-network
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 1G
+          cpus: '0.5'
+
+  # Zig Simulation Engine - Production
+  zig-core:
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_NAME:-voltedge}/zig-core:latest
+    container_name: voltedge-zig-core-prod
+    ports:
+      - "9091:9091"
+    environment:
+      - SIMULATION_MODE=production
+      - LOG_LEVEL=info
+      - MAX_CONCURRENT_SIMS=100
+    volumes:
+      - zig_data:/app/data
+    healthcheck:
+      test: ["CMD", "/app/zig-out/bin/voltedge-sim", "--help"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - voltedge-network
+    depends_on:
+      cockroachdb:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+        reservations:
+          memory: 512M
+          cpus: '0.25'
+
+  # Go API Gateway - Production
+  api-gateway:
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_NAME:-voltedge}/go-services:latest
+    container_name: voltedge-api-gateway-prod
+    ports:
+      - "8080:8080"
+    environment:
+      - DATABASE_HOST=cockroachdb
+      - DATABASE_PORT=26257
+      - DATABASE_USER=voltedge
+      - DATABASE_PASSWORD=${COCKROACH_PASSWORD:-voltedge_password}
+      - DATABASE_NAME=voltedge
+      - API_HOST=0.0.0.0
+      - API_PORT=8080
+      - ZIG_ENDPOINT=zig-core:9091
+      - LOG_LEVEL=info
+      - PROMETHEUS_ENABLED=true
+    volumes:
+      - api_data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - voltedge-network
+    depends_on:
+      cockroachdb:
+        condition: service_healthy
+      zig-core:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+
+  # Svelte Frontend - Production
+  frontend:
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_NAME:-voltedge}/svelte-frontend:latest
+    container_name: voltedge-frontend-prod
+    ports:
+      - "3000:80"
+    environment:
+      - NODE_ENV=production
+      - API_BASE_URL=http://api-gateway:8080
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - voltedge-network
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.25'
+        reservations:
+          memory: 128M
+          cpus: '0.1'
+
+  # Prometheus - Production monitoring
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: voltedge-prometheus-prod
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+    restart: unless-stopped
+    networks:
+      - voltedge-network
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.25'
+        reservations:
+          memory: 256M
+          cpus: '0.1'
+
+  # Grafana - Production dashboards
+  grafana:
+    image: grafana/grafana:latest
+    container_name: voltedge-grafana-prod
+    ports:
+      - "3001:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./docker/grafana:/etc/grafana/provisioning
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource
+    restart: unless-stopped
+    networks:
+      - voltedge-network
+    depends_on:
+      - prometheus
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.25'
+        reservations:
+          memory: 256M
+          cpus: '0.1'
+
+  # Nginx Load Balancer (optional for high availability)
+  nginx:
+    image: nginx:alpine
+    container_name: voltedge-nginx-prod
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./docker/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - frontend
+      - api-gateway
+    restart: unless-stopped
+    networks:
+      - voltedge-network
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.1'
+        reservations:
+          memory: 64M
+          cpus: '0.05'
+
+volumes:
+  cockroach_data:
+    driver: local
+  zig_data:
+    driver: local
+  api_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+networks:
+  voltedge-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+

@@ -1,0 +1,326 @@
+name: VoltEdge CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # Test and build all components
+  test-and-build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        component: [zig-core, go-services, svelte-frontend]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Extract metadata for ${{ matrix.component }}
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-${{ matrix.component }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=sha,prefix={{branch}}-
+          type=raw,value=latest,enable={{is_default_branch}}
+          
+    - name: Build and push Docker image for ${{ matrix.component }}
+      uses: docker/build-push-action@v5
+      with:
+        context: ./${{ matrix.component }}
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        platforms: linux/amd64,linux/arm64
+
+  # Test Zig core compilation
+  test-zig:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Install Zig
+      run: |
+        wget https://ziglang.org/download/0.12.0/zig-linux-x86_64-0.12.0.tar.xz
+        tar -xf zig-linux-x86_64-0.12.0.tar.xz
+        sudo mv zig-linux-x86_64-0.12.0 /opt/zig
+        echo "$GITHUB_WORKSPACE/zig-core/zig-out/bin" >> $GITHUB_PATH
+        
+    - name: Test Zig compilation
+      run: |
+        cd zig-core
+        zig build
+        zig build test
+        
+    - name: Run Zig benchmarks
+      run: |
+        cd zig-core
+        zig build bench
+
+  # Test Go services
+  test-go:
+    runs-on: ubuntu-latest
+    services:
+      cockroachdb:
+        image: cockroachdb/cockroach:v23.1.15
+        ports:
+          - 26257:26257
+        options: >-
+          --health-cmd "cockroach node status --insecure"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        env:
+          COCKROACH_HOST: localhost
+          
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.23'
+        
+    - name: Cache Go modules
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+          
+    - name: Download dependencies
+      run: |
+        cd go-services
+        go mod download
+        
+    - name: Run Go tests
+      run: |
+        cd go-services
+        go test -v -race -coverprofile=coverage.out ./...
+        
+    - name: Generate coverage report
+      run: |
+        cd go-services
+        go tool cover -html=coverage.out -o coverage.html
+        
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./go-services/coverage.out
+        flags: unittests
+        name: codecov-umbrella
+
+  # Test Svelte frontend
+  test-svelte:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+        cache-dependency-path: svelte-frontend/package-lock.json
+        
+    - name: Install dependencies
+      run: |
+        cd svelte-frontend
+        npm ci
+        
+    - name: Run linting
+      run: |
+        cd svelte-frontend
+        npm run lint
+        
+    - name: Run type checking
+      run: |
+        cd svelte-frontend
+        npm run check
+        
+    - name: Build frontend
+      run: |
+        cd svelte-frontend
+        npm run build
+        
+    - name: Run tests
+      run: |
+        cd svelte-frontend
+        npm run test
+
+  # Integration tests
+  integration-tests:
+    runs-on: ubuntu-latest
+    needs: [test-zig, test-go, test-svelte]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Start services
+      run: |
+        docker-compose up -d --build
+        sleep 30
+        
+    - name: Wait for services to be ready
+      run: |
+        timeout 300 bash -c 'until curl -f http://localhost:8080/health; do sleep 5; done'
+        timeout 300 bash -c 'until curl -f http://localhost:3000; do sleep 5; done'
+        
+    - name: Run integration tests
+      run: |
+        # Test API endpoints
+        curl -f http://localhost:8080/api/v1/simulations || exit 1
+        curl -f http://localhost:8080/api/v1/health || exit 1
+        
+        # Test database connectivity
+        curl -f http://localhost:8080/api/v1/metrics || exit 1
+        
+        # Test frontend
+        curl -f http://localhost:3000 || exit 1
+        
+    - name: Collect logs
+      if: failure()
+      run: |
+        docker-compose logs --tail=100
+        
+    - name: Stop services
+      if: always()
+      run: |
+        docker-compose down -v
+
+  # Security scanning
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+        
+    - name: Upload Trivy scan results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v2
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+  # Performance benchmarks
+  performance-tests:
+    runs-on: ubuntu-latest
+    needs: [test-zig, test-go]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Zig
+      run: |
+        wget https://ziglang.org/download/0.12.0/zig-linux-x86_64-0.12.0.tar.xz
+        tar -xf zig-linux-x86_64-0.12.0.tar.xz
+        sudo mv zig-linux-x86_64-0.12.0 /opt/zig
+        
+    - name: Run Zig performance benchmarks
+      run: |
+        cd zig-core
+        zig build bench --release=fast
+        
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.23'
+        
+    - name: Run Go benchmarks
+      run: |
+        cd go-services
+        go test -bench=. -benchmem -run=^$ ./...
+
+  # Deploy to staging
+  deploy-staging:
+    runs-on: ubuntu-latest
+    needs: [integration-tests, security-scan]
+    if: github.ref == 'refs/heads/develop'
+    environment: staging
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Deploy to staging
+      run: |
+        echo "Deploying to staging environment..."
+        # Add actual deployment commands here
+        # ssh staging-server "docker-compose pull && docker-compose up -d"
+
+  # Deploy to production
+  deploy-production:
+    runs-on: ubuntu-latest
+    needs: [integration-tests, security-scan, performance-tests]
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Deploy to production
+      run: |
+        echo "Deploying to production environment..."
+        # Add actual deployment commands here
+        # ssh production-server "docker-compose pull && docker-compose up -d"
+        
+    - name: Notify deployment
+      run: |
+        echo "Deployment to production completed successfully!"
+        # Add notification logic (Slack, email, etc.)
+
+  # Cleanup old images
+  cleanup:
+    runs-on: ubuntu-latest
+    needs: [deploy-production]
+    if: always()
+    
+    steps:
+    - name: Delete old container images
+      uses: actions/delete-package-versions@v4
+      with:
+        package-name: ${{ github.event.repository.name }}
+        package-type: 'container'
+        min-versions-to-keep: 10
+        delete-only-untagged-versions: 'true'
+
