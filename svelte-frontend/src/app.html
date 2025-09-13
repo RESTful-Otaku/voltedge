@@ -1,83 +1,138 @@
 <!DOCTYPE html>
 <html lang="en" class="h-full">
-	<head>
-		<meta charset="utf-8" />
-		<link rel="icon" href="%sveltekit.assets%/favicon.png" />
-		<meta name="viewport" content="width=device-width, initial-scale=1" />
-		<meta name="description" content="VoltEdge - Real-Time Energy Grid Simulator & Monitoring Suite" />
-		<meta name="theme-color" content="#3b82f6" />
-		
-		<!-- Preconnect to external domains -->
-		<link rel="preconnect" href="https://fonts.googleapis.com" />
-		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-		
-		<!-- Google Fonts -->
-		<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
-		
-		<!-- Favicon and app icons -->
-		<link rel="apple-touch-icon" sizes="180x180" href="%sveltekit.assets%/apple-touch-icon.png" />
-		<link rel="icon" type="image/png" sizes="32x32" href="%sveltekit.assets%/favicon-32x32.png" />
-		<link rel="icon" type="image/png" sizes="16x16" href="%sveltekit.assets%/favicon-16x16.png" />
-		<link rel="manifest" href="%sveltekit.assets%/site.webmanifest" />
-		
-		<!-- Open Graph / Facebook -->
-		<meta property="og:type" content="website" />
-		<meta property="og:title" content="VoltEdge - Energy Grid Simulator" />
-		<meta property="og:description" content="Real-time energy grid simulation and monitoring platform" />
-		<meta property="og:image" content="%sveltekit.assets%/og-image.png" />
-		
-		<!-- Twitter -->
-		<meta property="twitter:card" content="summary_large_image" />
-		<meta property="twitter:title" content="VoltEdge - Energy Grid Simulator" />
-		<meta property="twitter:description" content="Real-time energy grid simulation and monitoring platform" />
-		<meta property="twitter:image" content="%sveltekit.assets%/og-image.png" />
-		
-		%sveltekit.head%
-	</head>
-	<body class="h-full bg-gray-50 font-sans antialiased" data-sveltekit-preload-data="hover">
-		<div id="app" class="h-full">%sveltekit.body%</div>
-		
-		<!-- Loading indicator -->
-		<div id="loading-indicator" class="fixed inset-0 bg-white z-50 flex items-center justify-center" style="display: none;">
-			<div class="text-center">
-				<div class="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600 mx-auto mb-4"></div>
-				<p class="text-gray-600">Loading VoltEdge...</p>
-			</div>
-		</div>
-		
-		<!-- Global error boundary -->
-		<div id="error-boundary" class="hidden fixed inset-0 bg-red-50 z-50 flex items-center justify-center">
-			<div class="text-center max-w-md mx-auto p-6">
-				<div class="text-red-600 mb-4">
-					<svg class="w-16 h-16 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
-					</svg>
-				</div>
-				<h2 class="text-xl font-semibold text-gray-900 mb-2">Something went wrong</h2>
-				<p class="text-gray-600 mb-4">The application encountered an unexpected error. Please refresh the page to try again.</p>
-				<button onclick="window.location.reload()" class="bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition-colors">
-					Refresh Page
-				</button>
-			</div>
-		</div>
-		
-		<script>
-			// Global error handler
-			window.addEventListener('error', (event) => {
-				console.error('Global error:', event.error);
-				document.getElementById('error-boundary').classList.remove('hidden');
-			});
-			
-			window.addEventListener('unhandledrejection', (event) => {
-				console.error('Unhandled promise rejection:', event.reason);
-				document.getElementById('error-boundary').classList.remove('hidden');
-			});
-			
-			// Hide loading indicator when page loads
-			window.addEventListener('load', () => {
-				document.getElementById('loading-indicator').style.display = 'none';
-			});
-		</script>
-	</body>
-</html>
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" href="%sveltekit.assets%/favicon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="VoltEdge - Real-Time Energy Grid Simulator & Monitoring Suite"
+    />
+    <meta name="theme-color" content="#3b82f6" />
 
+    <!-- Preconnect to external domains -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+
+    <!-- Google Fonts -->
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+
+    <!-- Favicon and app icons -->
+    <link
+      rel="apple-touch-icon"
+      sizes="180x180"
+      href="%sveltekit.assets%/apple-touch-icon.png"
+    />
+    <link
+      rel="icon"
+      type="image/png"
+      sizes="32x32"
+      href="%sveltekit.assets%/favicon-32x32.png"
+    />
+    <link
+      rel="icon"
+      type="image/png"
+      sizes="16x16"
+      href="%sveltekit.assets%/favicon-16x16.png"
+    />
+    <link rel="manifest" href="%sveltekit.assets%/site.webmanifest" />
+
+    <!-- Open Graph / Facebook -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="VoltEdge - Energy Grid Simulator" />
+    <meta
+      property="og:description"
+      content="Real-time energy grid simulation and monitoring platform"
+    />
+    <meta property="og:image" content="%sveltekit.assets%/og-image.png" />
+
+    <!-- Twitter -->
+    <meta property="twitter:card" content="summary_large_image" />
+    <meta property="twitter:title" content="VoltEdge - Energy Grid Simulator" />
+    <meta
+      property="twitter:description"
+      content="Real-time energy grid simulation and monitoring platform"
+    />
+    <meta property="twitter:image" content="%sveltekit.assets%/og-image.png" />
+
+    %sveltekit.head%
+  </head>
+  <body
+    class="h-full bg-gray-50 font-sans antialiased"
+    data-sveltekit-preload-data="hover"
+  >
+    <div id="app" class="h-full">%sveltekit.body%</div>
+
+    <!-- Loading indicator -->
+    <div
+      id="loading-indicator"
+      class="fixed inset-0 bg-white z-50 flex items-center justify-center"
+      style="display: none"
+    >
+      <div class="text-center">
+        <div
+          class="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600 mx-auto mb-4"
+        ></div>
+        <p class="text-gray-600">Loading VoltEdge...</p>
+      </div>
+    </div>
+
+    <!-- Global error boundary -->
+    <div
+      id="error-boundary"
+      class="hidden fixed inset-0 bg-red-50 z-50 flex items-center justify-center"
+    >
+      <div class="text-center max-w-md mx-auto p-6">
+        <div class="text-red-600 mb-4">
+          <svg
+            class="w-16 h-16 mx-auto"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z"
+            />
+          </svg>
+        </div>
+        <h2 class="text-xl font-semibold text-gray-900 mb-2">
+          Something went wrong
+        </h2>
+        <p class="text-gray-600 mb-4">
+          The application encountered an unexpected error. Please refresh the
+          page to try again.
+        </p>
+        <button
+          onclick="window.location.reload()"
+          class="bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition-colors"
+        >
+          Refresh Page
+        </button>
+      </div>
+    </div>
+
+    <script>
+      // Global error handler
+      window.addEventListener("error", (event) => {
+        console.error("Global error:", event.error);
+        document.getElementById("error-boundary").classList.remove("hidden");
+      });
+
+      window.addEventListener("unhandledrejection", (event) => {
+        console.error("Unhandled promise rejection:", event.reason);
+        document.getElementById("error-boundary").classList.remove("hidden");
+      });
+
+      // Hide loading indicator when page loads
+      window.addEventListener("load", () => {
+        document.getElementById("loading-indicator").style.display = "none";
+      });
+    </script>
+  </body>
+</html>
