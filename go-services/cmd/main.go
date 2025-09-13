@@ -234,6 +234,11 @@ func newConfigCmd() *cobra.Command {
 			fmt.Printf("  HTTP Port: %s\n", cfg.API.Port)
 			fmt.Printf("  Zig Endpoint: %s\n", cfg.Zig.Endpoint)
 			fmt.Printf("  Log Level: %s\n", cfg.Log.Level)
+			fmt.Printf("  Database Host: %s\n", cfg.Database.Host)
+			fmt.Printf("  Database Port: %d\n", cfg.Database.Port)
+			fmt.Printf("  Database User: %s\n", cfg.Database.Username)
+			fmt.Printf("  Database Name: %s\n", cfg.Database.Database)
+			fmt.Printf("  Database SSL Mode: %s\n", cfg.Database.SSLMode)
 
 			return nil
 		},

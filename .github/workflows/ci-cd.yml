@@ -1,326 +1,287 @@
-name: VoltEdge CI/CD Pipeline
+name: CI/CD Pipeline
 
 on:
   push:
     branches: [ main, develop ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, develop ]
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  # Test and build all components
-  test-and-build:
+  # Frontend Testing and Building
+  frontend-test:
+    name: Frontend Tests
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        component: [zig-core, go-services, svelte-frontend]
+    defaults:
+      run:
+        working-directory: ./svelte-frontend
     
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-      
-    - name: Log in to Container Registry
-      uses: docker/login-action@v3
-      with:
-        registry: ${{ env.REGISTRY }}
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-        
-    - name: Extract metadata for ${{ matrix.component }}
-      id: meta
-      uses: docker/metadata-action@v5
-      with:
-        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-${{ matrix.component }}
-        tags: |
-          type=ref,event=branch
-          type=ref,event=pr
-          type=sha,prefix={{branch}}-
-          type=raw,value=latest,enable={{is_default_branch}}
-          
-    - name: Build and push Docker image for ${{ matrix.component }}
-      uses: docker/build-push-action@v5
-      with:
-        context: ./${{ matrix.component }}
-        push: true
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-        platforms: linux/amd64,linux/arm64
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-  # Test Zig core compilation
-  test-zig:
-    runs-on: ubuntu-latest
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Install Zig
-      run: |
-        wget https://ziglang.org/download/0.12.0/zig-linux-x86_64-0.12.0.tar.xz
-        tar -xf zig-linux-x86_64-0.12.0.tar.xz
-        sudo mv zig-linux-x86_64-0.12.0 /opt/zig
-        echo "$GITHUB_WORKSPACE/zig-core/zig-out/bin" >> $GITHUB_PATH
-        
-    - name: Test Zig compilation
-      run: |
-        cd zig-core
-        zig build
-        zig build test
-        
-    - name: Run Zig benchmarks
-      run: |
-        cd zig-core
-        zig build bench
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: svelte-frontend/package-lock.json
 
-  # Test Go services
-  test-go:
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run linting
+        run: npm run lint
+
+      - name: Run type checking
+        run: npm run check
+
+      - name: Run tests
+        run: npm test -- --coverage
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./svelte-frontend/coverage/lcov.info
+          flags: frontend
+          name: frontend-coverage
+
+  # Backend Testing
+  backend-test:
+    name: Backend Tests
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./go-services
+    
     services:
-      cockroachdb:
-        image: cockroachdb/cockroach:v23.1.15
-        ports:
-          - 26257:26257
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: voltedge_test
         options: >-
-          --health-cmd "cockroach node status --insecure"
+          --health-cmd pg_isready
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.23'
+
+      - name: Cache Go modules
+        uses: actions/cache@v3
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Install dependencies
+        run: go mod download
+
+      - name: Run tests
+        run: go test -v -race -coverprofile=coverage.out ./...
         env:
-          COCKROACH_HOST: localhost
-          
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.23'
-        
-    - name: Cache Go modules
-      uses: actions/cache@v3
-      with:
-        path: |
-          ~/.cache/go-build
-          ~/go/pkg/mod
-        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-        restore-keys: |
-          ${{ runner.os }}-go-
-          
-    - name: Download dependencies
-      run: |
-        cd go-services
-        go mod download
-        
-    - name: Run Go tests
-      run: |
-        cd go-services
-        go test -v -race -coverprofile=coverage.out ./...
-        
-    - name: Generate coverage report
-      run: |
-        cd go-services
-        go tool cover -html=coverage.out -o coverage.html
-        
-    - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v3
-      with:
-        file: ./go-services/coverage.out
-        flags: unittests
-        name: codecov-umbrella
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/voltedge_test?sslmode=disable
 
-  # Test Svelte frontend
-  test-svelte:
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./go-services/coverage.out
+          flags: backend
+          name: backend-coverage
+
+  # Zig Core Testing
+  zig-test:
+    name: Zig Core Tests
     runs-on: ubuntu-latest
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Set up Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '18'
-        cache: 'npm'
-        cache-dependency-path: svelte-frontend/package-lock.json
-        
-    - name: Install dependencies
-      run: |
-        cd svelte-frontend
-        npm ci
-        
-    - name: Run linting
-      run: |
-        cd svelte-frontend
-        npm run lint
-        
-    - name: Run type checking
-      run: |
-        cd svelte-frontend
-        npm run check
-        
-    - name: Build frontend
-      run: |
-        cd svelte-frontend
-        npm run build
-        
-    - name: Run tests
-      run: |
-        cd svelte-frontend
-        npm run test
+    defaults:
+      run:
+        working-directory: ./zig-core
 
-  # Integration tests
-  integration-tests:
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Zig
+        uses: mitchellh/setup-zig@v1
+        with:
+          version: '0.12.0'
+
+      - name: Run tests
+        run: zig build test
+
+      - name: Build optimized binary
+        run: zig build -Doptimize=ReleaseFast
+
+  # Build and Push Docker Images
+  build-images:
+    name: Build Docker Images
     runs-on: ubuntu-latest
-    needs: [test-zig, test-go, test-svelte]
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-      
-    - name: Start services
-      run: |
-        docker-compose up -d --build
-        sleep 30
-        
-    - name: Wait for services to be ready
-      run: |
-        timeout 300 bash -c 'until curl -f http://localhost:8080/health; do sleep 5; done'
-        timeout 300 bash -c 'until curl -f http://localhost:3000; do sleep 5; done'
-        
-    - name: Run integration tests
-      run: |
-        # Test API endpoints
-        curl -f http://localhost:8080/api/v1/simulations || exit 1
-        curl -f http://localhost:8080/api/v1/health || exit 1
-        
-        # Test database connectivity
-        curl -f http://localhost:8080/api/v1/metrics || exit 1
-        
-        # Test frontend
-        curl -f http://localhost:3000 || exit 1
-        
-    - name: Collect logs
-      if: failure()
-      run: |
-        docker-compose logs --tail=100
-        
-    - name: Stop services
-      if: always()
-      run: |
-        docker-compose down -v
+    needs: [frontend-test, backend-test, zig-test]
+    if: github.event_name == 'push'
 
-  # Security scanning
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./svelte-frontend
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-frontend:${{ github.sha }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Build and push backend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./go-services
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-backend:${{ github.sha }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Build and push zig-core image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./zig-core
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-zig:${{ github.sha }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  # Deploy to GitHub Pages
+  deploy:
+    name: Deploy to GitHub Pages
+    runs-on: ubuntu-latest
+    needs: [build-images]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: svelte-frontend/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          cd svelte-frontend
+          npm ci
+
+      - name: Build frontend
+        run: |
+          cd svelte-frontend
+          npm run build
+        env:
+          VITE_API_URL: https://api.voltedge.dev
+          VITE_WS_URL: wss://api.voltedge.dev/ws
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./svelte-frontend/build
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  # Security Scanning
   security-scan:
+    name: Security Scan
     runs-on: ubuntu-latest
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Run Trivy vulnerability scanner
-      uses: aquasecurity/trivy-action@master
-      with:
-        scan-type: 'fs'
-        scan-ref: '.'
-        format: 'sarif'
-        output: 'trivy-results.sarif'
-        
-    - name: Upload Trivy scan results to GitHub Security tab
-      uses: github/codeql-action/upload-sarif@v2
-      if: always()
-      with:
-        sarif_file: 'trivy-results.sarif'
+    if: github.event_name == 'push'
 
-  # Performance benchmarks
-  performance-tests:
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+  # Performance Testing
+  performance-test:
+    name: Performance Tests
     runs-on: ubuntu-latest
-    needs: [test-zig, test-go]
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Set up Zig
-      run: |
-        wget https://ziglang.org/download/0.12.0/zig-linux-x86_64-0.12.0.tar.xz
-        tar -xf zig-linux-x86_64-0.12.0.tar.xz
-        sudo mv zig-linux-x86_64-0.12.0 /opt/zig
-        
-    - name: Run Zig performance benchmarks
-      run: |
-        cd zig-core
-        zig build bench --release=fast
-        
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.23'
-        
-    - name: Run Go benchmarks
-      run: |
-        cd go-services
-        go test -bench=. -benchmem -run=^$ ./...
+    needs: [build-images]
+    if: github.event_name == 'push'
 
-  # Deploy to staging
-  deploy-staging:
-    runs-on: ubuntu-latest
-    needs: [integration-tests, security-scan]
-    if: github.ref == 'refs/heads/develop'
-    environment: staging
-    
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Deploy to staging
-      run: |
-        echo "Deploying to staging environment..."
-        # Add actual deployment commands here
-        # ssh staging-server "docker-compose pull && docker-compose up -d"
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-  # Deploy to production
-  deploy-production:
-    runs-on: ubuntu-latest
-    needs: [integration-tests, security-scan, performance-tests]
-    if: github.ref == 'refs/heads/main'
-    environment: production
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Deploy to production
-      run: |
-        echo "Deploying to production environment..."
-        # Add actual deployment commands here
-        # ssh production-server "docker-compose pull && docker-compose up -d"
-        
-    - name: Notify deployment
-      run: |
-        echo "Deployment to production completed successfully!"
-        # Add notification logic (Slack, email, etc.)
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
 
-  # Cleanup old images
-  cleanup:
-    runs-on: ubuntu-latest
-    needs: [deploy-production]
-    if: always()
-    
-    steps:
-    - name: Delete old container images
-      uses: actions/delete-package-versions@v4
-      with:
-        package-name: ${{ github.event.repository.name }}
-        package-type: 'container'
-        min-versions-to-keep: 10
-        delete-only-untagged-versions: 'true'
+      - name: Install dependencies
+        run: |
+          cd svelte-frontend
+          npm ci
 
+      - name: Build frontend
+        run: |
+          cd svelte-frontend
+          npm run build
+
+      - name: Run Lighthouse CI
+        uses: treosh/lighthouse-ci-action@v10
+        with:
+          configPath: './svelte-frontend/.lighthouserc.json'
+          uploadArtifacts: true
+          temporaryPublicStorage: true

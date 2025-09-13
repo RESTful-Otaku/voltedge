@@ -252,3 +252,4 @@ func (a *Alert) BeforeCreate(tx *gorm.DB) error {
 	return nil
 }
 
+

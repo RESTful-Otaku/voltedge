@@ -5,7 +5,7 @@ services:
   cockroachdb:
     image: cockroachdb/cockroach:v23.1.15
     container_name: edge-volt-cockroachdb
-    command: start-single-node --insecure --http-addr=0.0.0.0:8080 --listen-addr=localhost:26257
+    command: start-single-node --insecure --http-addr=0.0.0.0:8080 --listen-addr=localhost:26257 --advertise-addr=cockroachdb:26257
     ports:
       - "26257:26257"  # SQL port
       - "8081:8080"    # Admin UI port
@@ -16,14 +16,9 @@ services:
       - COCKROACH_DATABASE=voltedge
       - COCKROACH_USER=voltedge
       - COCKROACH_PASSWORD=voltedge_password
-    healthcheck:
-      test: ["CMD", "cockroach", "node", "status", "--insecure"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
     networks:
       - voltedge-network
+      - default
   # Zig Simulation Engine
   zig-core:
     build:
@@ -37,11 +32,6 @@ services:
     volumes:
       - ./data/simulations:/app/data
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "nc", "-z", "localhost", "9091"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
 
   # Go API Gateway
   api-gateway:
@@ -53,12 +43,17 @@ services:
       - "8082:8081"  # WebSocket
       - "9090:9090"  # Metrics
     environment:
-      - ZIG_GRPC_ENDPOINT=zig-core:9091
+      - ZIG_ENDPOINT=zig-core:9091
       - LOG_LEVEL=info
-      - METRICS_ENABLED=true
+      - OBSERVABILITY_ENABLE_PROMETHEUS=true
+      - DATABASE_HOST=cockroachdb
+      - DATABASE_PORT=26257
+      - DATABASE_USERNAME=root
+      - DATABASE_PASSWORD=
+      - DATABASE_DATABASE=voltedge
+      - DATABASE_SSL_MODE=disable
     depends_on:
-      zig-core:
-        condition: service_healthy
+      - zig-core
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]

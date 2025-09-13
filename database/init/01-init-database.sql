@@ -244,3 +244,4 @@ GRANT ALL ON DATABASE voltedge TO voltedge;
 GRANT ALL ON ALL TABLES IN SCHEMA public TO voltedge;
 GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO voltedge;
 
+

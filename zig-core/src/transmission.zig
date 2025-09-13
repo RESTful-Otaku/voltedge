@@ -1,4 +1,4 @@
-const std = @import("std");
+. s.onst std = @import("std");
 const PowerPlant = @import("power_plant.zig").PowerPlant;
 
 const log = std.log.scoped(.transmission);

@@ -1,14 +1,9 @@
 #!/bin/bash
 
 # VoltEdge Production Deployment Script
-set -euo pipefail
+# This script handles deployment to various environments
 
-# Configuration
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-ENVIRONMENT="${1:-staging}"
-REGISTRY="${REGISTRY:-ghcr.io}"
-IMAGE_NAME="${IMAGE_NAME:-voltedge}"
+set -e
 
 # Colors for output
 RED='\033[0;31m'
@@ -17,251 +12,330 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Logging functions
-log_info() {
+# Function to print colored output
+print_status() {
     echo -e "${BLUE}[INFO]${NC} $1"
 }
 
-log_success() {
+print_success() {
     echo -e "${GREEN}[SUCCESS]${NC} $1"
 }
 
-log_warning() {
+print_warning() {
     echo -e "${YELLOW}[WARNING]${NC} $1"
 }
 
-log_error() {
+print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
-# Check prerequisites
+# Function to check if command exists
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+# Function to validate environment
+validate_environment() {
+    local env=$1
+    
+    case $env in
+        "development"|"staging"|"production")
+            return 0
+            ;;
+        *)
+            print_error "Invalid environment: $env"
+            print_status "Valid environments: development, staging, production"
+            exit 1
+            ;;
+    esac
+}
+
+# Function to check prerequisites
 check_prerequisites() {
-    log_info "Checking prerequisites..."
+    print_status "Checking deployment prerequisites..."
     
-    if ! command -v docker &> /dev/null; then
-        log_error "Docker is not installed"
+    local missing_deps=()
+    
+    if ! command_exists docker; then
+        missing_deps+=("docker")
+    fi
+    
+    if ! command_exists docker-compose; then
+        missing_deps+=("docker-compose")
+    fi
+    
+    if ! command_exists git; then
+        missing_deps+=("git")
+    fi
+    
+    if [ ${#missing_deps[@]} -ne 0 ]; then
+        print_error "Missing required dependencies: ${missing_deps[*]}"
         exit 1
     fi
     
-    if ! command -v docker-compose &> /dev/null; then
-        log_error "Docker Compose is not installed"
-        exit 1
-    fi
-    
-    if ! command -v curl &> /dev/null; then
-        log_error "curl is not installed"
-        exit 1
-    fi
-    
-    log_success "Prerequisites check passed"
+    print_success "All prerequisites are available"
 }
 
-# Load environment configuration
-load_environment() {
-    log_info "Loading environment configuration for $ENVIRONMENT..."
+# Function to build images
+build_images() {
+    local env=$1
     
-    ENV_FILE="$PROJECT_ROOT/.env.$ENVIRONMENT"
-    if [[ -f "$ENV_FILE" ]]; then
-        export $(grep -v '^#' "$ENV_FILE" | xargs)
-        log_success "Loaded environment variables from $ENV_FILE"
-    else
-        log_warning "Environment file $ENV_FILE not found, using defaults"
+    print_status "Building Docker images for $env environment..."
+    
+    # Build all images
+    docker-compose -f docker-compose.yml build --no-cache
+    
+    if [ "$env" = "production" ]; then
+        docker-compose -f docker-compose.prod.yml build --no-cache
     fi
     
-    # Set default values
-    export COCKROACH_PASSWORD="${COCKROACH_PASSWORD:-$(openssl rand -base64 32)}"
-    export GRAFANA_PASSWORD="${GRAFANA_PASSWORD:-$(openssl rand -base64 16)}"
-    export REGISTRY="$REGISTRY"
-    export IMAGE_NAME="$IMAGE_NAME"
+    print_success "Docker images built successfully"
 }
 
-# Pull latest images
-pull_images() {
-    log_info "Pulling latest images..."
+# Function to run tests
+run_tests() {
+    print_status "Running comprehensive test suite..."
     
-    # Create .env file for docker-compose
-    cat > "$PROJECT_ROOT/.env" << EOF
-REGISTRY=$REGISTRY
-IMAGE_NAME=$IMAGE_NAME
-COCKROACH_PASSWORD=$COCKROACH_PASSWORD
-GRAFANA_PASSWORD=$GRAFANA_PASSWORD
-EOF
+    # Frontend tests
+    print_status "Running frontend tests..."
+    cd svelte-frontend
+    npm ci
+    npm run test:coverage
+    cd ..
     
-    if [[ "$ENVIRONMENT" == "production" ]]; then
-        docker-compose -f docker-compose.prod.yml pull
-    else
-        docker-compose pull
-    fi
+    # Backend tests
+    print_status "Running backend tests..."
+    cd go-services
+    go test -v -race -coverprofile=coverage.out ./...
+    cd ..
     
-    log_success "Images pulled successfully"
+    # Zig tests
+    print_status "Running Zig tests..."
+    cd zig-core
+    zig build test
+    cd ..
+    
+    print_success "All tests passed"
 }
 
-# Run health checks
-health_check() {
-    log_info "Running health checks..."
-    
-    local max_attempts=30
-    local attempt=1
-    
-    while [[ $attempt -le $max_attempts ]]; do
-        log_info "Health check attempt $attempt/$max_attempts"
-        
-        # Check CockroachDB
-        if curl -f http://localhost:8080 &> /dev/null; then
-            log_success "CockroachDB is healthy"
-        else
-            log_warning "CockroachDB health check failed"
-        fi
-        
-        # Check API Gateway
-        if curl -f http://localhost:8080/health &> /dev/null; then
-            log_success "API Gateway is healthy"
-        else
-            log_warning "API Gateway health check failed"
-        fi
-        
-        # Check Frontend
-        if curl -f http://localhost:3000 &> /dev/null; then
-            log_success "Frontend is healthy"
-        else
-            log_warning "Frontend health check failed"
-        fi
-        
-        # Check Prometheus
-        if curl -f http://localhost:9090/-/healthy &> /dev/null; then
-            log_success "Prometheus is healthy"
-        else
-            log_warning "Prometheus health check failed"
-        fi
-        
-        # Check Grafana
-        if curl -f http://localhost:3001/api/health &> /dev/null; then
-            log_success "Grafana is healthy"
-        else
-            log_warning "Grafana health check failed"
-        fi
-        
-        sleep 10
-        ((attempt++))
-    done
-}
-
-# Deploy the application
-deploy() {
-    log_info "Deploying VoltEdge to $ENVIRONMENT environment..."
-    
-    cd "$PROJECT_ROOT"
+# Function to deploy to development
+deploy_development() {
+    print_status "Deploying to development environment..."
     
     # Stop existing containers
-    log_info "Stopping existing containers..."
-    if [[ "$ENVIRONMENT" == "production" ]]; then
+    docker-compose down -v
+    
+    # Start development environment
+    docker-compose up -d
+    
+    print_success "Development environment deployed"
+    print_status "Services available at:"
+    print_status "  - Frontend: http://localhost:5173"
+    print_status "  - API Gateway: http://localhost:8080"
+    print_status "  - Metrics: http://localhost:9090"
+}
+
+# Function to deploy to staging
+deploy_staging() {
+    print_status "Deploying to staging environment..."
+    
+    # Use production compose file for staging
+    docker-compose -f docker-compose.prod.yml up -d
+    
+    print_success "Staging environment deployed"
+    print_status "Services available at:"
+    print_status "  - Frontend: http://localhost"
+    print_status "  - API Gateway: http://localhost:8080"
+    print_status "  - Metrics: http://localhost:9090"
+}
+
+# Function to deploy to production
+deploy_production() {
+    print_status "Deploying to production environment..."
+    
+    # Check for required environment variables
+    if [ -z "$DB_PASSWORD" ]; then
+        print_error "DB_PASSWORD environment variable is required for production"
+        exit 1
+    fi
+    
+    if [ -z "$JWT_SECRET" ]; then
+        print_error "JWT_SECRET environment variable is required for production"
+        exit 1
+    fi
+    
+    # Deploy with production configuration
+    docker-compose -f docker-compose.prod.yml up -d
+    
+    print_success "Production environment deployed"
+    print_status "Services available at:"
+    print_status "  - Frontend: http://localhost"
+    print_status "  - API Gateway: http://localhost:8080"
+    print_status "  - Metrics: http://localhost:9090"
+    print_status "  - Prometheus: http://localhost:9092"
+    print_status "  - Grafana: http://localhost:3000"
+}
+
+# Function to deploy to GitHub Pages
+deploy_github_pages() {
+    print_status "Deploying to GitHub Pages..."
+    
+    # Build frontend for production
+    cd svelte-frontend
+    npm ci
+    npm run build
+    
+    # Create deployment directory
+    mkdir -p ../deploy
+    cp -r build/* ../deploy/
+    
+    cd ..
+    
+    # Initialize git in deploy directory
+    cd deploy
+    git init
+    git add .
+    git commit -m "Deploy VoltEdge to GitHub Pages"
+    
+    # Add GitHub Pages remote
+    git remote add origin https://github.com/$GITHUB_REPOSITORY.git
+    git branch -M gh-pages
+    git push -f origin gh-pages
+    
+    cd ..
+    rm -rf deploy
+    
+    print_success "Deployed to GitHub Pages"
+    print_status "Application available at: https://$GITHUB_REPOSITORY_OWNER.github.io/$GITHUB_REPOSITORY_NAME"
+}
+
+# Function to rollback deployment
+rollback() {
+    local env=$1
+    
+    print_status "Rolling back $env deployment..."
+    
+    if [ "$env" = "production" ]; then
         docker-compose -f docker-compose.prod.yml down
     else
         docker-compose down
     fi
     
-    # Start services
-    log_info "Starting services..."
-    if [[ "$ENVIRONMENT" == "production" ]]; then
-        docker-compose -f docker-compose.prod.yml up -d
-    else
-        docker-compose up -d
-    fi
-    
-    log_success "Deployment completed"
+    print_success "Rollback completed"
 }
 
-# Run database migrations
-run_migrations() {
-    log_info "Running database migrations..."
-    
-    # Wait for database to be ready
-    log_info "Waiting for database to be ready..."
-    sleep 30
-    
-    # Run migrations through API
-    if curl -f -X POST http://localhost:8080/api/v1/migrate &> /dev/null; then
-        log_success "Database migrations completed"
-    else
-        log_warning "Database migrations may have failed"
-    fi
-}
-
-# Show deployment status
+# Function to show deployment status
 show_status() {
-    log_info "Deployment Status:"
-    echo ""
+    print_status "Deployment status:"
     
-    if [[ "$ENVIRONMENT" == "production" ]]; then
+    if [ -f "docker-compose.prod.yml" ]; then
         docker-compose -f docker-compose.prod.yml ps
     else
         docker-compose ps
     fi
-    
-    echo ""
-    log_info "Service URLs:"
-    echo "  Frontend:    http://localhost:3000"
-    echo "  API:         http://localhost:8080"
-    echo "  CockroachDB: http://localhost:8080 (Admin UI)"
-    echo "  Prometheus:  http://localhost:9090"
-    echo "  Grafana:     http://localhost:3001"
-    echo ""
-    echo "Default credentials:"
-    echo "  Grafana: admin / $GRAFANA_PASSWORD"
-    echo "  CockroachDB: voltedge / $COCKROACH_PASSWORD"
 }
 
-# Cleanup function
+# Function to show logs
+show_logs() {
+    local service=$1
+    
+    if [ -n "$service" ]; then
+        docker-compose logs -f "$service"
+    else
+        docker-compose logs -f
+    fi
+}
+
+# Function to cleanup
 cleanup() {
-    log_info "Cleaning up..."
-    rm -f "$PROJECT_ROOT/.env"
+    print_status "Cleaning up deployment artifacts..."
+    
+    # Stop all containers
+    docker-compose down -v
+    docker-compose -f docker-compose.prod.yml down -v
+    
+    # Remove unused images
+    docker image prune -f
+    
+    # Remove unused volumes
+    docker volume prune -f
+    
+    print_success "Cleanup completed"
 }
 
-# Main deployment flow
+# Main function
 main() {
-    log_info "Starting VoltEdge deployment to $ENVIRONMENT environment"
+    echo "=========================================="
+    echo "    VoltEdge Deployment Script           "
+    echo "=========================================="
+    echo
     
-    # Set up cleanup trap
-    trap cleanup EXIT
+    local command=${1:-help}
+    local environment=${2:-development}
     
-    check_prerequisites
-    load_environment
-    pull_images
-    deploy
-    run_migrations
-    
-    log_info "Waiting for services to start..."
-    sleep 60
-    
-    health_check
-    show_status
-    
-    log_success "VoltEdge deployment to $ENVIRONMENT completed successfully!"
+    case $command in
+        "deploy")
+            validate_environment "$environment"
+            check_prerequisites
+            run_tests
+            build_images "$environment"
+            
+            case $environment in
+                "development")
+                    deploy_development
+                    ;;
+                "staging")
+                    deploy_staging
+                    ;;
+                "production")
+                    deploy_production
+                    ;;
+            esac
+            ;;
+        "github-pages")
+            check_prerequisites
+            run_tests
+            deploy_github_pages
+            ;;
+        "rollback")
+            validate_environment "$environment"
+            rollback "$environment"
+            ;;
+        "status")
+            show_status
+            ;;
+        "logs")
+            show_logs "$2"
+            ;;
+        "cleanup")
+            cleanup
+            ;;
+        "help")
+            echo "Usage: $0 [command] [environment]"
+            echo
+            echo "Commands:"
+            echo "  deploy [env]     - Deploy to specified environment (development|staging|production)"
+            echo "  github-pages     - Deploy to GitHub Pages"
+            echo "  rollback [env]   - Rollback deployment"
+            echo "  status           - Show deployment status"
+            echo "  logs [service]   - Show logs for service or all services"
+            echo "  cleanup          - Clean up deployment artifacts"
+            echo "  help             - Show this help message"
+            echo
+            echo "Examples:"
+            echo "  $0 deploy development"
+            echo "  $0 deploy production"
+            echo "  $0 github-pages"
+            echo "  $0 rollback production"
+            echo "  $0 logs api-gateway"
+            ;;
+        *)
+            print_error "Unknown command: $command"
+            echo "Use '$0 help' to see available commands"
+            exit 1
+            ;;
+    esac
 }
 
-# Script usage
-usage() {
-    echo "Usage: $0 [environment]"
-    echo ""
-    echo "Environments:"
-    echo "  staging     Deploy to staging (default)"
-    echo "  production  Deploy to production"
-    echo ""
-    echo "Environment variables:"
-    echo "  REGISTRY     Container registry (default: ghcr.io)"
-    echo "  IMAGE_NAME   Image name prefix (default: voltedge)"
-    echo ""
-    echo "Examples:"
-    echo "  $0 staging"
-    echo "  REGISTRY=docker.io IMAGE_NAME=myorg/voltedge $0 production"
-}
-
-# Handle script arguments
-if [[ "${1:-}" == "-h" ]] || [[ "${1:-}" == "--help" ]]; then
-    usage
-    exit 0
-fi
-
-# Run main function
-main
-
+# Run main function with all arguments
+main "$@"

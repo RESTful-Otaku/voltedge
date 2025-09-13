@@ -52,3 +52,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 # Default command
 CMD ["./voltedge-sim", "--port", "9091", "--tick-rate", "100"]
 
+

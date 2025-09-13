@@ -42,41 +42,97 @@ VoltEdge simulates real-time energy grid dynamics including power generation, co
 
 ### Prerequisites
 
-- Zig 0.12+
-- Go 1.21+
-- Node.js 18+
-- Docker (for deployment)
+- **Zig 0.12+** - High-performance simulation engine
+- **Go 1.23+** - Microservices and API layer
+- **Node.js 18+** - Frontend development
+- **Docker & Docker Compose** - Containerization and deployment
 
-### Development Setup
+### Automated Setup (Recommended)
 
-1. **Start the Zig simulation engine:**
-   ```bash
-   cd zig-core
-   zig build run
-   ```
-
-2. **Start Go microservices:**
-   ```bash
-   cd go-services
-   go run cmd/main.go
-   ```
-
-3. **Start Svelte frontend:**
-   ```bash
-   cd svelte-frontend
-   npm install
-   npm run dev
-   ```
-
-4. **Access the dashboard:**
-   - Frontend: http://localhost:5173
-   - API Gateway: http://localhost:8080
-   - Metrics: http://localhost:9090
-
-### Docker Deployment
+Use our comprehensive setup script for a one-command development environment:
 
 ```bash
-docker-compose up -d
+# Clone the repository
+git clone https://github.com/yourusername/edge-volt.git
+cd edge-volt
+
+# Run the automated setup
+./scripts/setup-dev.sh setup
+
+# Start the development environment
+./scripts/setup-dev.sh start
+```
+
+### Manual Development Setup
+
+1. **Install Dependencies:**
+   ```bash
+   # Frontend
+   cd svelte-frontend
+   npm ci
+   
+   # Backend
+   cd ../go-services
+   go mod download
+   
+   # Zig Core
+   cd ../zig-core
+   zig build
+   ```
+
+2. **Run Tests:**
+   ```bash
+   # Run all tests
+   ./scripts/setup-dev.sh test
+   
+   # Or run individually
+   cd svelte-frontend && npm test
+   cd ../go-services && go test ./...
+   cd ../zig-core && zig build test
+   ```
+
+3. **Start Development Environment:**
+   ```bash
+   # Using Docker Compose (recommended)
+   docker-compose up -d
+   
+   # Or run services individually
+   # Terminal 1: Zig Core
+   cd zig-core && zig build run
+   
+   # Terminal 2: Go Services
+   cd go-services && go run cmd/main.go
+   
+   # Terminal 3: Frontend
+   cd svelte-frontend && npm run dev
+   ```
+
+4. **Access the Application:**
+   - **Frontend Dashboard:** http://localhost:5173
+   - **API Gateway:** http://localhost:8080
+   - **Metrics & Monitoring:** http://localhost:9090
+   - **Prometheus:** http://localhost:9092
+   - **Grafana:** http://localhost:3000 (admin/admin)
+
+### Production Deployment
+
+```bash
+# Build and deploy with Docker Compose
+docker-compose -f docker-compose.prod.yml up -d
+
+# Or deploy to GitHub Pages (automated via CI/CD)
+git push origin main
+```
+
+### Available Scripts
+
+```bash
+./scripts/setup-dev.sh setup   # Complete environment setup
+./scripts/setup-dev.sh test    # Run all tests
+./scripts/setup-dev.sh start   # Start development environment
+./scripts/setup-dev.sh stop    # Stop development environment
+./scripts/setup-dev.sh clean   # Clean up build artifacts
+./scripts/setup-dev.sh help    # Show help
 ```
 
 ## 📁 Project Structure
@@ -179,4 +235,5 @@ This project demonstrates modern engineering practices:
 - Developer experience focus
 
 Perfect for showcasing systems programming, distributed architecture, and modern web development skills.
+
 
